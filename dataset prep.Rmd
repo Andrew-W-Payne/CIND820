@@ -1,0 +1,151 @@
+---
+title: "dataset prep"
+output: html_notebook
+---
+
+```{r}
+# import the dataset
+df <- read.csv("df.csv")
+```
+
+```{r}
+# filter duplicate games from the dataset (each game has six rows: one official per row per team)
+
+# the Home team will be the team of focus for every game, and the Away team will be their opponents
+df <- df[which(df$teamLoc == "Home"), ]
+
+# each game now has three entries for the three officials, so every third row is selected
+df <- df[seq(1, nrow(df), 3), ]
+```
+
+#backup
+df_copy <- df
+
+```{r}
+# introduce additional factors: timezone shift and distance
+
+# a matrix of timezone changes between team locations was created and imported
+
+# a matrix of distances between teams was created using the following formula
+# for (home_id in 1:30) {
+#   for (away_id in 1:30) {
+#     coor_copy[home_id, away_id] <- distm(coordinates[home_id, ][3:2], 
+#                                    coordinates[away_id, ][3:2],
+#                                    fun=distHaversine) / 1000
+#   }
+# }
+
+timezones <- read.csv("timezones.csv", header=FALSE, row.names = teams, col.names = teams)
+
+df['nrow'] <- seq(1, nrow(df))
+
+df['teamCircadian'] <- rep(NA, nrow(df))
+df['opptCircadian'] <- rep(NA, nrow(df))
+
+df['teamDistance'] <- rep(NA, nrow(df))
+df['opptDistance'] <- rep(NA, nrow(df))
+
+# for each game, determine home and away team's previous match locations.
+# refer to timezones data frame to return timezone shift.
+# for each day of rest - 1, shift timezone shift to 0.
+for (team_id in 1:30) {
+  # this creates a small dataframe of row #, days of rest, and game location
+  df.1 <- data.frame(daysofrest = (df[df$teamAbbr == teams[team_id], ][, 7]),
+                     nrow = (df[df$teamAbbr == teams[team_id], ][, 55]),
+                     location = (df[df$teamAbbr == teams[team_id], ][, 3]))
+  df.2 <- data.frame(daysofrest = (df[df$opptAbbr == teams[team_id], ][, 32]),
+                     nrow = (df[df$opptAbbr == teams[team_id], ][, 55]),
+                     location = (df[df$opptAbbr == teams[team_id], ][,3]))
+  subset <- merge(df.1, df.2, by = "nrow", all=T)
+  subset <- cbind.data.frame(subset[1],
+                             rest=c(na.omit(c(t(subset[, c(2,4)])))),
+                             loc=c(na.omit(c(t(subset[, c(3,5)])))))
+
+  # this determines the circadian shift for each team in each game
+  for (game_id in 1:nrow(subset)) {
+    # games with 0 rest days means it's the first game of the season,
+    # which we assume a timezone value of 0 for
+    if (subset$rest[game_id] == 0) {
+      append(teamCircadian, 0)
+    } else {
+      if (subset$loc[game_id] == teams[team_id]) {
+        # home game
+        df['teamCircadian'][subset["nrow"][game_id, ], ] <- timezones[subset$loc[game_id], subset$loc[game_id-1]]
+        
+        df['teamDistance'][subset["nrow"][game_id, ], ] <- coors[subset$loc[game_id], subset$loc[game_id-1]]
+      } else {
+        # away game
+        df['opptCircadian'][subset["nrow"][game_id, ], ] <- timezones[subset$loc[game_id], subset$loc[game_id-1]]
+        
+        df['opptDistance'][subset["nrow"][game_id, ], ] <- coors[subset$loc[game_id], subset$loc[game_id-1]]
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+# introduce additional factors: sport performance statistics
+
+# nested for loop below produces list of lists: each list within contains a vector of each team's stats for each game
+stats <- list()
+full_stats <- list()
+
+# c(rbind()) IS FLAWED, DOES NOT MAINTAIN SORT. fix with Circadian method
+for (stat_id in 1:18) {
+  for (team_id in 1:30) {
+    stats[[team_id]] <- c(rbind(df[df$teamAbbr == teams[team_id], ][, stat_id+7], df[df$opptAbbr == teams[team_id], ][, stat_id+32]))
+  }
+  full_stats[[stat_id]] <- stats
+}
+
+names(full_stats) <- c("PTS", "AST", "TO", "STL", "BLK", "PF", "FGA", "FGM", "FG%", "3PA", "3PM", "3P%", "FTA", "FTM", "FT%", "ORB", "DRB", "TRB")
+
+# nested for loop below produces list of lists: each list within contains a vector of each team's rolling average of stats
+
+# the following function will be used to calculate a rolling average of each team's previous 10 matches:
+
+#ma <- function(x, n = 10) {
+#  filter(x, rep(1 / n, n), sides = 1)
+#}
+
+avgs <- list()
+all_avgs <- list()
+
+for (stat_id in c(1:18)) {
+  for (team_id in seq(1,30)) {
+    avgs[[team_id]] <- ma(full_stats[[stat_id]][[team_id]])
+  }
+  all_avgs[[stat_id]] <- avgs
+}
+
+names(all_avgs) <- c("PTS/G", "AST/G", "TO/G", "STL/G", "BLK/G", "PF/G", "FGA/G", "FGM/G", "FG%/G", "3PA/G", "3PM/G", "3P%/G", "FTA/G", "FTM/G", "FT%/G", "ORB/G", "DRB/G", "TRB/G")
+
+# for each game, replace the single game stat with the rolling average game stats
+team_count <- rep(1, 30)
+
+for (game_id in 1:nrow(df)) {
+  home_id <- which(teams == df$teamAbbr[game_id])
+  away_id <- which(teams == df$opptAbbr[game_id])
+  for (stat_id in 1:18) {
+    # home team
+    df[game_id, stat_id+7] <- all_avgs[[stat_id]][[home_id]][[team_count[home_id]]]
+    # away team
+    df[game_id, stat_id+32] <- all_avgs[[stat_id]][[away_id]][[team_count[away_id]]]
+  }
+  team_count[home_id] <- team_count[home_id] + 1
+  team_count[away_id] <- team_count[away_id] + 1
+}
+
+# games will now have missing values due to the nature of rolling averages; these games will be removed before modelling
+sum(is.na(df))
+```
+
+Data Description Stage Complete
+
+```{r}
+# at this point, team abbreviations can be removed
+
+# remove any outlier data (games != 240 mins played); mins played can be removed after this step
+```
