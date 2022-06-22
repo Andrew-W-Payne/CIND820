@@ -1,21 +1,25 @@
 ---
 title: "dataset prep"
 output: html_notebook
+author: "Andrew Payne"
 ---
 
 ```{r}
 # import the dataset
+# (2012-18_officialBoxScore from the original source, unnecessary columns removed)
 df <- read.csv("df.csv")
 ```
 
 ```{r}
 # filter duplicate games from the dataset (each game has six rows: one official per row per team)
+# this stage has already been completed prior to data frame import, but the process
+# is document below
 
 # the Home team will be the team of focus for every game, and the Away team will be their opponents
-df <- df[which(df$teamLoc == "Home"), ]
+#df <- df[which(df$teamLoc == "Home"), ]
 
 # each game now has three entries for the three officials, so every third row is selected
-df <- df[seq(1, nrow(df), 3), ]
+#df <- df[seq(1, nrow(df), 3), ]
 ```
 
 #backup
@@ -24,18 +28,25 @@ df_copy <- df
 ```{r}
 # introduce additional factors: timezone shift and distance
 
-# a matrix of timezone changes between team locations was created and imported
+# a matrix of timezone changes between team locations was created manually
 
 # a matrix of distances between teams was created using the following formula
+# library(geosphere)
+# coordinates <- read.csv("coordinates.csv")
 # for (home_id in 1:30) {
-#   for (away_id in 1:30) {
-#     coor_copy[home_id, away_id] <- distm(coordinates[home_id, ][3:2], 
-#                                    coordinates[away_id, ][3:2],
-#                                    fun=distHaversine) / 1000
-#   }
+#  for (away_id in 1:30) {
+#    distance[home_id, away_id] <- round(distm(coordinates[home_id, ][3:2],
+#                                        coordinates[away_id, ][3:2],
+#                                        fun=distHaversine) / 1000, 0)
+#  }
 # }
 
+teams <- c("ATL", "BKN", "BOS", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GS",
+           "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NO", "NY",
+           "OKC", "ORL", "PHI", "PHO", "POR", "SA",  "SAC", "TOR", "UTA", "WAS")
+
 timezones <- read.csv("timezones.csv", header=FALSE, row.names = teams, col.names = teams)
+distance <- read.csv("distance.csv", header=FALSE, row.names = teams, col.names = teams)
 
 df['nrow'] <- seq(1, nrow(df))
 
@@ -61,23 +72,34 @@ for (team_id in 1:30) {
                              rest=c(na.omit(c(t(subset[, c(2,4)])))),
                              loc=c(na.omit(c(t(subset[, c(3,5)])))))
 
-  # this determines the circadian shift for each team in each game
+  # this determines the circadian shift and distance for each team in each game
   for (game_id in 1:nrow(subset)) {
-    # games with 0 rest days means it's the first game of the season,
-    # which we assume a timezone value of 0 for
-    if (subset$rest[game_id] == 0) {
-      append(teamCircadian, 0)
-    } else {
+    # games with 0 rest days means it's the first game of the season which are ignored
+    if (subset$rest[game_id] != 0) {
+      # home game
       if (subset$loc[game_id] == teams[team_id]) {
-        # home game
-        df['teamCircadian'][subset["nrow"][game_id, ], ] <- timezones[subset$loc[game_id], subset$loc[game_id-1]]
-        
-        df['teamDistance'][subset["nrow"][game_id, ], ] <- coors[subset$loc[game_id], subset$loc[game_id-1]]
+        # timezone with shift based on days of rest
+        teamCircadian <- timezones[subset$loc[game_id], subset$loc[game_id-1]]
+        if (teamCircadian < 0) {
+          teamCircadian <- min(teamCircadian + df$teamDayOff[game_id], 0)
+        } else if (teamCircadian > 0) {
+          teamCircadian <- min(teamCircadian - df$teamDayOff[game_id], 0)
+        }
+        df['teamCircadian'][subset["nrow"][game_id, ], ] <- teamCircadian
+        # distance
+        df['teamDistance'][subset["nrow"][game_id, ], ] <- distance[subset$loc[game_id], subset$loc[game_id-1]]
+      # away game
       } else {
-        # away game
-        df['opptCircadian'][subset["nrow"][game_id, ], ] <- timezones[subset$loc[game_id], subset$loc[game_id-1]]
-        
-        df['opptDistance'][subset["nrow"][game_id, ], ] <- coors[subset$loc[game_id], subset$loc[game_id-1]]
+        # timezone with shift based on days of rest
+        opptCircadian <- timezones[subset$loc[game_id], subset$loc[game_id-1]]
+        if (opptCircadian < 0) {
+          opptCircadian <- min(opptCircadian + df$opptDayOff[game_id], 0)
+        } else if (opptCircadian > 0) {
+          opptCircadian <- min(opptCircadian - df$opptDayOff[game_id], 0)
+        }
+        df['opptCircadian'][subset["nrow"][game_id, ], ] <- opptCircadian
+        # distance
+        df['opptDistance'][subset["nrow"][game_id, ], ] <- distance[subset$loc[game_id], subset$loc[game_id-1]]
       }
     }
   }
