@@ -1,0 +1,122 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: "Andrew Payne"
+---
+Data Preparation Stage
+
+```{r}
+# import our previously prepared dataframe from dataset prep.Rmd
+
+df <- read.csv("D:\\Libraries\\OneDrive - Ryerson University\\Project\\data\\df processed 2.csv")
+
+# unnecessary columns have been removed prior to importing
+```
+
+# backup
+df_copy <- df
+
+```{r}
+# remove rows with NA values: these correspond to games too early in the season
+# to establish rolling averages of game performance statistics
+df <- na.omit(df)
+
+# verify all NA values are removed
+sum(is.na(df)) # 0
+```
+
+```{r}
+# remove outliers:
+# - games where a team has 0 days of rest or >4 days of rest
+df <- df[df$teamDayOff < 5 & df$opptDayOff < 5, ]
+df <- df[df$teamDayOff > 0 & df$opptDayOff > 0, ]
+
+# - games with more or less than 240 minutes played
+df <- df[df$teamMin == 240 & df$opptMin == 240, ]
+
+# - games with non-zero values in the team/opptPTS5-8 columns
+df <- df[df$teamPTS5 == 0 & df$opptPTS5 == 0, ]
+# df[df$teamPTS6 != 0 | df$opptPTS6 != 0, ] returns 0 rows
+# df[df$teamPTS7 != 0 | df$opptPTS7 != 0, ] returns 0 rows
+# df[df$teamPTS8 != 0 | df$opptPTS8 != 0, ] returns 0 rows
+
+# the teamMin, opptMin, and team/opptPTS5-8 columns can now be discarded
+
+df <- subset(df, select = -c(teamMin, opptMin, teamPTS5, teamPTS6, teamPTS7,
+                             teamPTS8, opptPTS5, opptPTS6, opptPTS7, opptPTS8))
+```
+
+# backup
+df_copy2 <- df
+
+```{r}
+# correct a minor issue with %-based factors
+# (percentages were computed as rolling averages when they should be computed
+#  based on [3P / FT] FGs made / [3P / FT] FGs attempted)
+
+for (game_id in 1:nrow(df)) {
+  # FG%
+  df$teamFG.[game_id] <- round(df$teamFGM[game_id] / df$teamFGA[game_id], 3) * 100
+  df$opptFG.[game_id] <- round(df$opptFGM[game_id] / df$opptFGA[game_id], 3) * 100
+  
+  # 3FG%
+  df$team3P.[game_id] <- round(df$team3PM[game_id] / df$team3PA[game_id], 3) * 100
+  df$oppt3P.[game_id] <- round(df$oppt3PM[game_id] / df$oppt3PA[game_id], 3) * 100
+  
+  # FT%
+  df$teamFT.[game_id] <- round(df$teamFTM[game_id] / df$teamFTA[game_id], 3) * 100
+  df$opptFT.[game_id] <- round(df$opptFTM[game_id] / df$opptFTA[game_id], 3) * 100
+}
+```
+
+```{r}
+# factorize class variable 'teamRslt'
+
+df$teamRslt <- as.factor(df$teamRslt)
+```
+
+```{r}
+# normalize the numeric factors of the dataset
+normalize <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+df_norm <- as.data.frame(lapply(subset(df, select = -c(teamRslt)), normalize))
+df_norm$teamRslt <- df$teamRslt
+```
+
+#backup
+df_copy3 <- df
+
+```{r}
+# feature extraction - identify the most important factors of the dataset
+install.packages("caret")
+library(caret)
+
+# remove redundant features from model consideration
+
+# calculate correlation matrix for all factors except class variable
+correlationMatrix <- cor(df_norm[,1:42])
+highCorrelation <- findCorrelation(correlationMatrix, cutoff=0.75, names = TRUE)
+
+# remove highly correlated factors from data frame, based on cor()
+df_redundancy <- df_norm[setdiff(names(df_norm), highCorrelation)]
+```
+
+set.seed(1)
+
+```{r}
+# k-fold cross validation model with Naive Bayes classifier
+
+library(caret)
+
+cross_val <- trainControl(method = "cv",
+                          number = 10,)
+
+model <- train(teamRslt ~ ., data = df_redundancy,
+               method = "naive_bayes", trControl = cross_val)
+
+# methods = logistic regression ("logreg"), Naive Bayes ("naive_bayes", "nb")
+
+model # 65.75% average accuracy
+```
