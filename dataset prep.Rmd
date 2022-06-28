@@ -165,9 +165,3 @@ sum(is.na(df))
 ```
 
 Data Description Stage Complete
-
-```{r}
-# at this point, team abbreviations can be removed
-
-# remove any outlier data (games != 240 mins played); mins played can be removed after this step
-```
